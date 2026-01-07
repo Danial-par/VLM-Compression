@@ -110,14 +110,21 @@ def train_weight_reconstruction(
     logger = setup_logging(str(out_dir))
 
     device = torch.device(cfg.device)
-    dtype = _dtype(cfg.dtype)
+    compute_dtype = _dtype(cfg.dtype)
 
-    compressor.to(device=device, dtype=dtype)
+    # Use AMP scaler only for CUDA + fp16 compute
+    amp_enabled = bool(cfg.use_amp and device.type == "cuda" and compute_dtype == torch.float16)
+
+    # IMPORTANT: keep params in fp32 when using GradScaler, otherwise unscale_ fails
+    param_dtype = torch.float32 if amp_enabled else compute_dtype
+
+    compressor.to(device=device, dtype=param_dtype)
     compressor.train()
 
     opt = torch.optim.AdamW(compressor.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(cfg.use_amp and device.type == "cuda" and dtype == torch.float16))
+    # New AMP API (works on recent PyTorch); safe on older too if torch.amp exists
+    scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled) if device.type == "cuda" else torch.amp.GradScaler(enabled=False)
 
     # Save metadata
     meta_path = out_dir / "chunk_index.json"
@@ -139,7 +146,14 @@ def train_weight_reconstruction(
         target, mask = index.get_chunks(chunk_ids, device=device, dtype=dtype)
 
         opt.zero_grad(set_to_none=True)
-        with torch.cuda.amp.autocast(enabled=(cfg.use_amp and device.type == "cuda"), dtype=dtype):
+        # Use autocast only when amp_enabled (CUDA fp16 compute)
+        if amp_enabled:
+            autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.float16)
+        else:
+            from contextlib import nullcontext
+            autocast_ctx = nullcontext()
+
+        with autocast_ctx:
             pred = compressor.reconstruct_chunks(chunk_ids)
             mse = (pred - target) ** 2
             mse = (mse * mask).sum() / (mask.sum() + 1e-8)
@@ -148,12 +162,18 @@ def train_weight_reconstruction(
                 alpha = compressor.codebook(chunk_ids)
                 mse = mse + cfg.code_l2 * (alpha ** 2).mean()
 
-        scaler.scale(mse).backward()
-        if cfg.grad_clip and cfg.grad_clip > 0:
-            scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(compressor.parameters(), cfg.grad_clip)
-        scaler.step(opt)
-        scaler.update()
+        if amp_enabled:
+            scaler.scale(mse).backward()
+            if cfg.grad_clip and cfg.grad_clip > 0:
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(compressor.parameters(), cfg.grad_clip)
+            scaler.step(opt)
+            scaler.update()
+        else:
+            mse.backward()
+            if cfg.grad_clip and cfg.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(compressor.parameters(), cfg.grad_clip)
+            opt.step()
 
         running = 0.95 * running + 0.05 * float(mse.item()) if step > 1 else float(mse.item())
         if step % cfg.log_every == 0:
