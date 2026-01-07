@@ -1,0 +1,41 @@
+# Minimal config for weight-space reconstruction on LLaVA-1.5 7B
+
+model:
+  model_id: llava-hf/llava-1.5-7b-hf
+  revision: null
+  torch_dtype: float16
+  device_map: "cpu"     # "cpu" | "auto" | dict-like (advanced)
+  trust_remote_code: true
+
+compress:
+  chunk_size: 4096
+  include:
+    - "language_model"
+  exclude:
+    - "vision_tower"
+    - "lm_head"
+    - "embed_tokens"
+    - "vision_model"
+    - "mm_projector"   # set to false / remove if you want to compress it too
+  pin_memory: true
+
+train:
+  d_alpha: 64
+  decoder_hidden: [256, 256]
+  decoder_activation: gelu
+  decoder_layer_norm: false
+
+  batch_size: 256
+  steps: 5000
+  lr: 0.002
+  weight_decay: 0.0
+  code_l2: 0.0
+
+  device: cuda
+  dtype: float16
+  use_amp: true
+  grad_clip: 1.0
+
+  log_every: 50
+  save_every: 500
+  out_dir: outputs/llava15_7b_recon
