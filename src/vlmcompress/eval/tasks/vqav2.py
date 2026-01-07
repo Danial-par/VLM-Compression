@@ -21,20 +21,37 @@ class VQAv2Example:
 
 def _default_paths(data_dir: str):
     d = Path(data_dir)
+
+    # ---- annotations ----
     ann = [
+        # canonical VQAv2 file name
         d / "v2_mscoco_val2014_annotations.json",
         d / "annotations" / "v2_mscoco_val2014_annotations.json",
+
+        # Kaggle common layout
+        d / "v2_Annotations_Val_mscoco" / "v2_mscoco_val2014_annotations.json",
+        d / "v2_Annotations_Val_mscoco" / "mscoco_val2014_annotations.json",
     ]
+
+    # ---- questions ----
     qs = [
+        # canonical VQAv2 file name
         d / "v2_OpenEnded_mscoco_val2014_questions.json",
         d / "questions" / "v2_OpenEnded_mscoco_val2014_questions.json",
+
+        # Kaggle common layout
+        d / "v2_Questions_Val_mscoco" / "v2_OpenEnded_mscoco_val2014_questions.json",
+        d / "v2_Questions_Val_mscoco" / "OpenEnded_mscoco_val2014_questions.json",
     ]
-    # images
+
+    # ---- images ----
     img_dirs = [
+        d / "val2014" / "val2014",   # Kaggle first
         d / "val2014",
         d / "images" / "val2014",
         d / "COCO_val2014",
     ]
+
     return ann, qs, img_dirs
 
 
