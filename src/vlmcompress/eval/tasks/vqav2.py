@@ -109,5 +109,5 @@ def load_vqav2(data_dir: str, limit: Optional[int] = None) -> List[VQAv2Example]
 
 
 def make_prompt(ex: VQAv2Example) -> str:
-    # LLaVA-style prompt. For HF LLaVA processors, this is usually accepted.
-    return f"USER: <image>\n{ex.question}\nASSISTANT:"
+    return f"{ex.question}\nAnswer with a short phrase."
+

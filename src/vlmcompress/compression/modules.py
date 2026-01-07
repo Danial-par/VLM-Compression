@@ -96,7 +96,21 @@ class ManifoldLinear(nn.Module):
             w = self.materialize_weight()
             if self.cfg.cache_weight:
                 self._weight_cache = w
-        return F.linear(x, w, self.bias)
+
+        # Ensure dtype/device match the activation dtype/device
+        if w.dtype != x.dtype:
+            w = w.to(dtype=x.dtype)
+        if w.device != x.device:
+            w = w.to(device=x.device)
+
+        b = self.bias
+        if b is not None:
+            if b.device != x.device:
+                b = b.to(device=x.device)
+            if b.dtype != x.dtype:
+                b = b.to(dtype=x.dtype)
+
+        return F.linear(x, w, b)
 
     def extra_repr(self) -> str:
         return (

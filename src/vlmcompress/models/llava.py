@@ -57,10 +57,23 @@ def generate_one(
     temperature: float = 0.0,
     top_p: float = 1.0,
 ) -> str:
-    """Run a single LLaVA generation."""
+    """Run a single LLaVA generation.
+
+    IMPORTANT:
+    Many LLaVA HF checkpoints expect their chat template; using apply_chat_template
+    improves correctness vs hand-written "USER: <image>" prompts.
+    """
     device = next(model.parameters()).device
-    inputs = processor(text=prompt, images=image, return_tensors="pt")
-    # Some processors output pixel_values in float32; let model handle dtype.
+
+    # If processor supports chat template, use it
+    if hasattr(processor, "apply_chat_template"):
+        messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
+        text = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    else:
+        # fallback to raw prompt
+        text = prompt
+
+    inputs = processor(text=text, images=image, return_tensors="pt")
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
     gen = model.generate(
