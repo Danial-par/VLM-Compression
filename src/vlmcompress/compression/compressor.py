@@ -143,7 +143,7 @@ def train_weight_reconstruction(
         chunk_ids = torch.randint(0, global_chunks, (cfg.batch_size,), device=device)
 
         # Targets pulled from CPU (weights are stored on CPU in the index).
-        target, mask = index.get_chunks(chunk_ids, device=device, dtype=dtype)
+        target, mask = index.get_chunks(chunk_ids, device=device, dtype=compute_dtype)
 
         opt.zero_grad(set_to_none=True)
         # Use autocast only when amp_enabled (CUDA fp16 compute)
