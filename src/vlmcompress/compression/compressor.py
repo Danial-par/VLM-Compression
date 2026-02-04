@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -108,6 +109,7 @@ def train_weight_reconstruction(
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     logger = setup_logging(str(out_dir))
+    log_jsonl = out_dir / "train_log.jsonl"
 
     device = torch.device(cfg.device)
     compute_dtype = _dtype(cfg.dtype)
@@ -135,6 +137,7 @@ def train_weight_reconstruction(
     logger.info(f"Compression stats: {stats}")
 
     global_chunks = index.num_chunks_total
+    val_ids = torch.randint(0, global_chunks, (cfg.batch_size,), device=device)
     logger.info(f"Training on {global_chunks:,} total chunks")
 
     pbar = tqdm(range(1, cfg.steps + 1), desc="train", dynamic_ncols=True)
@@ -177,7 +180,26 @@ def train_weight_reconstruction(
 
         running = 0.95 * running + 0.05 * float(mse.item()) if step > 1 else float(mse.item())
         if step % cfg.log_every == 0:
-            pbar.set_postfix({"mse": f"{running:.6f}"})
+            # fixed validation batch (same ids each time)
+            with torch.no_grad():
+                t_val, m_val = index.get_chunks(val_ids, device=device, dtype=compute_dtype)
+                p_val = compressor.reconstruct_chunks(val_ids)
+                val_mse = ((p_val - t_val) ** 2 * m_val).sum() / (m_val.sum() + 1e-8)
+
+            pbar.set_postfix({"mse": f"{running:.6f}", "val": f"{val_mse.item():.6f}"})
+
+            rec = {
+                "step": step,
+                "train_mse_ema": float(running),
+                "val_mse": float(val_mse.item()),
+                "lr": float(opt.param_groups[0]["lr"]),
+                "time": time.time(),
+            }
+            with open(log_jsonl, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+
+            logger.info(f"step={step} train_mse_ema={running:.6f} val_mse={val_mse.item():.6f} lr={rec['lr']:.2e}")
+
 
         if step % cfg.save_every == 0 or step == cfg.steps:
             ckpt_dir = out_dir / f"ckpt_step{step:06d}"
