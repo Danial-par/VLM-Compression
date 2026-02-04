@@ -7,7 +7,7 @@ from typing import Dict, Iterable, Iterator, List, Optional
 
 from PIL import Image
 
-from vlmcompress.eval.tasks.utils import load_image, find_first_existing
+from src.vlmcompress.eval.tasks.utils import load_image, find_first_existing
 
 
 @dataclass
