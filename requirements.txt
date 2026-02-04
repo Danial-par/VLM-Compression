@@ -8,3 +8,5 @@ pillow
 pyyaml
 sentencepiece
 bitsandbytes
+datasets
+pillow
