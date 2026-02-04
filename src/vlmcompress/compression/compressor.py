@@ -15,6 +15,60 @@ from vlmcompress.compression.chunk_index import WeightChunkIndex
 from vlmcompress.compression.generator import MLPDecoder, MLPDecoderConfig
 from vlmcompress.utils.logging import setup_logging
 
+# Helpers
+def _masked_stats(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> Dict[str, float]:
+    """
+    pred/target: [B, chunk_size]
+    mask: same shape, 0/1 floats
+    """
+    # ensure float32 for stable reductions
+    pred_f = pred.float()
+    targ_f = target.float()
+    mask_f = mask.float()
+
+    denom = mask_f.sum().clamp_min(1.0)
+
+    diff = (pred_f - targ_f) * mask_f
+    err2 = (diff * diff).sum()
+    mse = (err2 / denom)
+
+    # relative RMSE (scale-invariant)
+    ref2 = ((targ_f * mask_f) ** 2).sum().clamp_min(1e-8)
+    rel_rmse = torch.sqrt(err2 / ref2)
+
+    abs_err = diff.abs()
+    abs_err_mean = abs_err.sum() / denom
+    abs_err_max = abs_err.max()
+
+    # p99 absolute error (approx; uses kthvalue on flattened)
+    flat = abs_err.reshape(-1)
+    k = int(0.99 * (flat.numel() - 1))
+    abs_err_p99 = flat.kthvalue(k + 1).values  # kthvalue is 1-indexed
+
+    # target scale
+    t_abs_mean = (targ_f.abs() * mask_f).sum() / denom
+    t_rms = torch.sqrt(((targ_f * mask_f) ** 2).sum() / denom)
+
+    return {
+        "mse": float(mse.item()),
+        "rel_rmse": float(rel_rmse.item()),
+        "abs_err_mean": float(abs_err_mean.item()),
+        "abs_err_p99": float(abs_err_p99.item()),
+        "abs_err_max": float(abs_err_max.item()),
+        "t_abs_mean": float(t_abs_mean.item()),
+        "t_rms": float(t_rms.item()),
+    }
+
+def _global_grad_norm(params) -> float:
+    total = 0.0
+    for p in params:
+        if p.grad is None:
+            continue
+        g = p.grad.detach()
+        total += float(g.float().pow(2).sum().item())
+    return total ** 0.5
+
+
 
 @dataclass
 class ReconTrainConfig:
@@ -180,25 +234,69 @@ def train_weight_reconstruction(
 
         running = 0.95 * running + 0.05 * float(mse.item()) if step > 1 else float(mse.item())
         if step % cfg.log_every == 0:
-            # fixed validation batch (same ids each time)
             with torch.no_grad():
-                t_val, m_val = index.get_chunks(val_ids, device=device, dtype=compute_dtype)
-                p_val = compressor.reconstruct_chunks(val_ids)
-                val_mse = ((p_val - t_val) ** 2 * m_val).sum() / (m_val.sum() + 1e-8)
+                # compute richer stats on the CURRENT training batch
+                stats_batch = _masked_stats(pred, target, mask)
 
-            pbar.set_postfix({"mse": f"{running:.6f}", "val": f"{val_mse.item():.6f}"})
+                # codebook health on the same ids
+                alpha = compressor.codebook(chunk_ids).float()
+                alpha_rms = float(alpha.pow(2).mean().sqrt().item())
+                alpha_abs_max = float(alpha.abs().max().item())
+                alpha_norm_mean = float(alpha.norm(dim=-1).mean().item())
+
+            # grad norm (needs grads; call outside no_grad)
+            grad_norm = _global_grad_norm(compressor.parameters())
+
+            pbar.set_postfix({
+                "mse": f"{stats_batch['mse']:.6f}",
+                "rel": f"{stats_batch['rel_rmse']:.3e}",
+                "p99": f"{stats_batch['abs_err_p99']:.3e}",
+                "g": f"{grad_norm:.2f}",
+            })
 
             rec = {
                 "step": step,
-                "train_mse_ema": float(running),
-                "val_mse": float(val_mse.item()),
                 "lr": float(opt.param_groups[0]["lr"]),
                 "time": time.time(),
+
+                # main reconstruction metrics
+                "train_mse": stats_batch["mse"],
+                "train_rel_rmse": stats_batch["rel_rmse"],
+                "train_abs_err_mean": stats_batch["abs_err_mean"],
+                "train_abs_err_p99": stats_batch["abs_err_p99"],
+                "train_abs_err_max": stats_batch["abs_err_max"],
+
+                # target scale
+                "t_abs_mean": stats_batch["t_abs_mean"],
+                "t_rms": stats_batch["t_rms"],
+
+                # codebook health
+                "alpha_rms": alpha_rms,
+                "alpha_abs_max": alpha_abs_max,
+                "alpha_norm_mean": alpha_norm_mean,
+
+                # optimization health
+                "grad_norm": float(grad_norm),
+                "amp_enabled": bool(amp_enabled),
             }
+
             with open(log_jsonl, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec) + "\n")
 
-            logger.info(f"step={step} train_mse_ema={running:.6f} val_mse={val_mse.item():.6f} lr={rec['lr']:.2e}")
+            logger.info(
+                "step=%d mse=%.6f rel_rmse=%.3e abs_p99=%.3e abs_max=%.3e "
+                "t_rms=%.3e alpha_rms=%.3e grad=%.2f lr=%.2e",
+                step,
+                rec["train_mse"],
+                rec["train_rel_rmse"],
+                rec["train_abs_err_p99"],
+                rec["train_abs_err_max"],
+                rec["t_rms"],
+                rec["alpha_rms"],
+                rec["grad_norm"],
+                rec["lr"],
+            )
+
 
 
         if step % cfg.save_every == 0 or step == cfg.steps:

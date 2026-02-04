@@ -20,14 +20,14 @@ compress:
   pin_memory: true
 
 train:
-  d_alpha: 64
-  decoder_hidden: [256, 256]
+  d_alpha: 256
+  decoder_hidden: [1024, 1024]
   decoder_activation: gelu
-  decoder_layer_norm: false
+  decoder_layer_norm: true
 
   batch_size: 256
-  steps: 5000
-  lr: 0.002
+  steps: 30000
+  lr: 0.001
   weight_decay: 0.0
   code_l2: 0.0
 
@@ -37,5 +37,5 @@ train:
   grad_clip: 1.0
 
   log_every: 50
-  save_every: 500
+  save_every: 2000
   out_dir: outputs/llava15_7b_recon
